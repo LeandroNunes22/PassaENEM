@@ -1,0 +1,406 @@
+"use client";
+
+import { useEffect, useState, useRef } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { cn } from "@/lib/utils";
+import { ArrowLeft, ArrowRight, RotateCcw, CheckCircle, ShieldAlert, Lock } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+
+// Interface for Question
+interface Question {
+    id: string;
+    type: "ENEM" | "CONCURSO";
+    context?: string;
+    question: string;
+    options: string[];
+    correctAnswer: number;
+    explanation: string;
+    difficulty: string;
+    topic: string;
+}
+
+export default function ExamPage() {
+    const [questions, setQuestions] = useState<Question[]>([]);
+    const [currentIndex, setCurrentIndex] = useState(0);
+    const [answers, setAnswers] = useState<Record<string, number>>({});
+    const [finished, setFinished] = useState(false);
+    const [mode, setMode] = useState<'take' | 'view' | 'review'>('take');
+    const [started, setStarted] = useState(false);
+    const [strikes, setStrikes] = useState(0);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+
+    const [isRanked, setIsRanked] = useState(false);
+
+    const router = useRouter();
+
+    useEffect(() => {
+        const stored = sessionStorage.getItem("currentExam");
+        const storedMode = sessionStorage.getItem("examMode");
+        const rankedSession = sessionStorage.getItem("isRanked") === "true"; // Check flag
+
+        if (stored) {
+            const parsedQuestions: Question[] = JSON.parse(stored);
+            setQuestions(parsedQuestions);
+
+            if (storedMode === 'view') {
+                setFinished(true);
+                setMode('view');
+                setStarted(true); // Auto-start if viewing (no anti-cheat needed)
+
+                // Hydrate answers from stored questions (if they have userAnswer)
+                const storedAnswers: Record<string, number> = {};
+                parsedQuestions.forEach(q => {
+                    if ((q as any).userAnswer !== undefined) {
+                        storedAnswers[q.id] = (q as any).userAnswer;
+                    }
+                });
+                setAnswers(storedAnswers);
+
+            } else {
+                setMode('take');
+                setIsRanked(rankedSession);
+
+                if (rankedSession) {
+                    setStarted(false); // Must explicitly start for RANKED exams (Lockdown)
+                } else {
+                    setStarted(true); // Auto-start for NORMAL exams
+                }
+            }
+            sessionStorage.removeItem('examMode');
+        } else {
+            // Redirect logic could go here
+        }
+    }, []);
+
+    // PROCTORING: Listeners
+    useEffect(() => {
+        if (!started || finished || mode === 'view' || !isRanked) return; // Only active checks if isRanked is true
+
+        const handleVisibilityChange = () => {
+            if (document.hidden) {
+                setStrikes(prev => prev + 1);
+            }
+        };
+
+        const handleFullscreenChange = () => {
+            if (!document.fullscreenElement) {
+                setIsFullscreen(false);
+                setStrikes(prev => prev + 1);
+            } else {
+                setIsFullscreen(true);
+            }
+        };
+
+        // Block Right Click
+        const handleContextMenu = (e: MouseEvent) => {
+            e.preventDefault();
+            return false;
+        };
+
+        document.addEventListener("visibilitychange", handleVisibilityChange);
+        document.addEventListener("fullscreenchange", handleFullscreenChange);
+        document.addEventListener("contextmenu", handleContextMenu);
+
+        return () => {
+            document.removeEventListener("visibilitychange", handleVisibilityChange);
+            document.removeEventListener("fullscreenchange", handleFullscreenChange);
+            document.removeEventListener("contextmenu", handleContextMenu);
+        };
+    }, [started, finished, mode, isRanked]);
+
+    // Terminate on too many strikes
+    useEffect(() => {
+        if (strikes >= 3 && !finished && isRanked) {
+            alert("Você violou as regras de segurança 3 vezes. Sua prova será encerrada com nota zero.");
+            setFinished(true);
+            setMode('review');
+            // Technically we should save 0 score here, but for now we just show the bad news.
+        }
+    }, [strikes, finished, isRanked]);
+
+    const startExam = async () => {
+        try {
+            await document.documentElement.requestFullscreen();
+            setIsFullscreen(true);
+            setStarted(true);
+        } catch (err) {
+            console.error(err);
+            alert("É obrigatório permitir Tela Cheia para iniciar.");
+        }
+    };
+
+    if (questions.length === 0) return <div className="p-8 text-center text-white">Carregando prova...</div>;
+
+    // START SCREEN
+    if (!started && mode === 'take' && isRanked) {
+        return (
+            <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-6 text-center max-w-lg mx-auto p-4 animate-fade-in-up">
+                <div className="bg-slate-900 p-8 rounded-2xl border border-slate-800 shadow-2xl">
+                    <div className="flex justify-center mb-6">
+                        <div className="bg-red-500/10 p-4 rounded-full">
+                            <Lock className="w-12 h-12 text-red-500" />
+                        </div>
+                    </div>
+                    <h1 className="text-2xl font-bold text-white mb-2">Modo Bloqueio de Tela</h1>
+                    <p className="text-slate-400 mb-6">
+                        Para garantir a validade do Ranking, esta prova deve ser feita em tela cheia e sem sair da aba.
+                    </p>
+                    <div className="bg-slate-950 p-4 rounded-lg text-left text-sm space-y-2 mb-8 border border-slate-800">
+                        <div className="flex items-center text-slate-300">
+                            <ShieldAlert className="w-4 h-4 text-orange-500 mr-2" />
+                            Não é permitido sair da tela cheia.
+                        </div>
+                        <div className="flex items-center text-slate-300">
+                            <ShieldAlert className="w-4 h-4 text-orange-500 mr-2" />
+                            Não é permitido trocar de aba.
+                        </div>
+                        <div className="flex items-center text-slate-300">
+                            <ShieldAlert className="w-4 h-4 text-orange-500 mr-2" />
+                            Não é permitido botão direito/copiar.
+                        </div>
+                        <div className="mt-4 pt-4 border-t border-slate-800 text-xs text-red-400 font-semibold text-center">
+                            3 infrações = Desclassificação Imediata
+                        </div>
+                    </div>
+                    <Button size="lg" onClick={startExam} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold h-12">
+                        Aceitar e Iniciar Prova
+                    </Button>
+                </div>
+            </div>
+        )
+    }
+
+    const currentQuestion = questions[currentIndex];
+    const isLast = currentIndex === questions.length - 1;
+    const isFirst = currentIndex === 0;
+
+    const handleSelect = (optionIndex: number) => {
+        if (finished || mode === 'view' || strikes >= 3) return;
+        setAnswers(prev => ({ ...prev, [currentQuestion.id]: optionIndex }));
+    };
+
+    const handleNext = () => {
+        if (strikes >= 3) return;
+
+        if (isLast) {
+            if (mode === 'take') {
+                if (document.fullscreenElement) {
+                    document.exitFullscreen().catch(() => { });
+                }
+                setFinished(true); // Create Summary State
+                setMode('review'); // Switch to review immediately 
+            }
+        } else {
+            setCurrentIndex(prev => prev + 1);
+        }
+    };
+
+    const handlePrev = () => {
+        setCurrentIndex(prev => Math.max(0, prev - 1));
+    };
+
+    const calculateScore = () => {
+        if (strikes >= 3) return 0; // Fraud detected
+
+        let score = 0;
+        questions.forEach(q => {
+            if (answers[q.id] === q.correctAnswer) score++;
+        });
+        const percentage = Math.round((score / questions.length) * 100);
+
+        // Save score to history if in 'take' mode and just finished
+        if (mode === 'take' && finished) {
+            const examId = sessionStorage.getItem('currentExamId');
+            if (examId) {
+                // Dynamic import to avoid SSR issues
+                const { updateExamScore } = require('@/lib/storage');
+                updateExamScore(examId, percentage, answers);
+            }
+        }
+        return percentage;
+    };
+
+
+    return (
+        <div className="max-w-3xl mx-auto space-y-6 animate-fade-in-up pb-20 select-none"> {/* Added select-none class */}
+
+            {/* STRIKE WARNING BANNER */}
+            {strikes > 0 && !finished && (
+                <Alert variant="destructive" className="animate-pulse border-red-600 bg-red-950/50">
+                    <ShieldAlert className="h-4 w-4" />
+                    <AlertTitle>ALERTA DE SEGURANÇA ({strikes}/3)</AlertTitle>
+                    <AlertDescription>
+                        Você saiu da tela ou do modo tela cheia. Não faça isso novamente ou sua prova será anulada.
+                    </AlertDescription>
+                </Alert>
+            )}
+
+            {strikes >= 3 && (
+                <Alert variant="destructive" className="border-red-600 bg-red-900 text-white">
+                    <Lock className="h-4 w-4" />
+                    <AlertTitle>PROVA ANULADA</AlertTitle>
+                    <AlertDescription>
+                        Você violou as regras de segurança múltiplas vezes. Sua nota foi zerada.
+                    </AlertDescription>
+                </Alert>
+            )}
+
+            {/* Header / StatusBar */}
+            <div className="flex items-center justify-between">
+                <h1 className="text-xl font-bold flex items-center gap-2">
+                    {finished ? (
+                        <span className="flex items-center gap-2">
+                            {strikes >= 3 ? <span className="text-red-500">Desclassificado</span> :
+                                <span className="text-green-400 flex items-center gap-2"><CheckCircle className="w-5 h-5" /> {mode === 'view' ? 'Visualização' : 'Correção'}</span>}
+                        </span>
+                    ) : (
+                        `Questão ${currentIndex + 1} de ${questions.length}`
+                    )}
+                </h1>
+
+                {finished && mode !== 'view' && (
+                    <div className="bg-slate-800 px-3 py-1 rounded-full border border-slate-700">
+                        <span className="text-slate-400 text-sm mr-2">Nota:</span>
+                        <span className="font-bold text-white">{calculateScore()}%</span>
+                    </div>
+                )}
+            </div>
+
+            {/* Question Card */}
+            <Card className="bg-slate-900 border-slate-800">
+                <CardHeader>
+                    <CardTitle className="text-sm text-slate-400 uppercase tracking-wide flex justify-between">
+                        <span>{currentQuestion.topic} • {currentQuestion.difficulty}</span>
+                        {finished && !isRanked && (answers[currentQuestion.id] === currentQuestion.correctAnswer ?
+                            <span className="text-green-500 font-bold">Correta</span> :
+                            (finished && answers[currentQuestion.id] !== undefined) ? <span className="text-red-500 font-bold">Incorreta</span> : null
+                        )}
+                    </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                    {currentQuestion.context && (
+                        <div className="bg-slate-950 p-4 rounded-md italic text-slate-400 border-l-4 border-violet-500">
+                            {currentQuestion.context}
+                        </div>
+                    )}
+
+                    <div className="text-lg font-medium text-slate-100">
+                        {currentQuestion.question}
+                    </div>
+
+                    <div className="space-y-3">
+                        {currentQuestion.options.map((option, idx) => {
+                            const isSelected = answers[currentQuestion.id] === idx;
+                            const isCorrect = currentQuestion.correctAnswer === idx;
+
+                            let optionClass = "border-slate-700 hover:bg-slate-800 text-slate-300";
+
+                            if (finished) {
+                                if (isRanked) {
+                                    // Ranked Mode: Only show what user selected, no feedback
+                                    if (isSelected) {
+                                        optionClass = "border-violet-500 bg-violet-500/10 text-violet-300";
+                                    } else {
+                                        optionClass = "border-slate-800 opacity-50";
+                                    }
+                                } else {
+                                    // Normal Mode: Show correct/incorrect
+                                    if (isCorrect) {
+                                        optionClass = "border-green-500 bg-green-500/10 text-green-400";
+                                    } else if (isSelected && !isCorrect) {
+                                        optionClass = "border-red-500 bg-red-500/10 text-red-400";
+                                    } else {
+                                        optionClass = "border-slate-800 opacity-50";
+                                    }
+                                }
+                            } else if (isSelected) {
+                                optionClass = "border-violet-500 bg-violet-500/10 ring-1 ring-violet-500 text-violet-300";
+                            }
+
+                            return (
+                                <div
+                                    key={idx}
+                                    onClick={() => handleSelect(idx)}
+                                    className={cn(
+                                        "flex items-center p-4 rounded-lg border cursor-pointer transition-all",
+                                        optionClass
+                                    )}
+                                >
+                                    <div className={cn(
+                                        "flex h-8 w-8 shrink-0 items-center justify-center rounded-full border mr-4 text-sm font-semibold transition-colors",
+                                        finished && !isRanked && isCorrect ? "bg-green-500 text-white border-green-500" :
+                                            finished && !isRanked && isSelected && !isCorrect ? "bg-red-500 text-white border-red-500" :
+                                                isSelected ? "bg-violet-500 text-white border-violet-500" : "bg-slate-800 border-slate-600 text-slate-400"
+                                    )}>
+                                        {String.fromCharCode(65 + idx)}
+                                    </div>
+                                    <span className="text-sm md:text-base">{option}</span>
+                                </div>
+                            );
+                        })}
+                    </div>
+
+                    {finished && !isRanked && (
+                        <div className="mt-6 p-4 bg-blue-900/20 text-blue-300 rounded-md border border-blue-900/50 animate-in fade-in slide-in-from-top-2">
+                            <span className="font-semibold block mb-1 flex items-center gap-2">
+                                💡 Explicação
+                            </span>
+                            {currentQuestion.explanation}
+                        </div>
+                    )}
+                </CardContent>
+            </Card>
+
+            {/* Sticky Bottom Navigation Bar */}
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-slate-950/80 backdrop-blur-md border-t border-slate-800 flex justify-center z-50">
+                <div className="w-full max-w-3xl flex justify-between items-center gap-4">
+                    <Button
+                        variant="outline"
+                        onClick={handlePrev}
+                        disabled={isFirst}
+                        className="border-slate-700 text-slate-300 hover:bg-slate-800"
+                    >
+                        <ArrowLeft className="w-4 h-4 mr-2" />
+                        Anterior
+                    </Button>
+
+                    {finished ? (
+                        <div className="flex gap-2">
+                            <Button variant="secondary" onClick={() => router.push('/')} className="hidden sm:flex">
+                                Sair
+                            </Button>
+                            {/* If it's the last question in review, maybe show 'Finish Review'? For now, navigation is free. */}
+                            <Button
+                                onClick={isLast ? () => window.location.href = '/challenges' : handleNext}
+                                disabled={(isLast && mode === 'view') || (isLast && isRanked && finished)}
+                                className={cn(isLast ? "bg-violet-600" : "bg-slate-800")}
+                            >
+                                {isLast ? 'Finalizar' : 'Próxima'}
+                                {!isLast && <ArrowRight className="w-4 h-4 ml-2" />}
+                                {isLast && mode !== 'view' && !isRanked && <RotateCcw className="w-4 h-4 ml-2" />}
+                            </Button>
+                        </div>
+                    ) : (
+                        <Button onClick={handleNext} className="bg-violet-600 hover:bg-violet-700 text-white px-8">
+                            {isLast ? "Finalizar Prova" : "Próxima"}
+                            {!isLast && <ArrowRight className="w-4 h-4 ml-2" />}
+                            {isLast && <CheckCircle className="w-4 h-4 ml-2" />}
+                        </Button>
+                    )}
+
+                    {finished && !isLast && (
+                        <Button
+                            variant="outline"
+                            onClick={handleNext}
+                            className="border-slate-700 text-slate-300 hover:bg-slate-800 sm:hidden" // Mobile Next
+                        >
+                            <ArrowRight className="w-4 h-4" />
+                        </Button>
+                    )}
+                </div>
+            </div>
+        </div>
+    );
+}
